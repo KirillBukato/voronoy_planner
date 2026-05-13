@@ -1,3 +1,4 @@
+#pragma once
 #include <algorithm>
 #include <fstream>
 #include <vector>
@@ -11,6 +12,8 @@ namespace dijkstra {
     struct State {
         double distance;
         size_t vertex;
+
+        State(double d, size_t v) : distance(d), vertex(v) {}
 
         bool operator<(const State& other) const {
             return distance > other.distance;
