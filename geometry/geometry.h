@@ -27,5 +27,23 @@ namespace geom {
 
     using Polyline = std::vector<geom::Point>;
 
+    struct Polygon {
+        std::vector<Point> vertices;
+
+        Polygon() = default;
+
+        explicit Polygon(std::vector<Point> vertices)
+            : vertices{std::move(vertices)}
+        { }
+
+        std::size_t size() const {
+            return vertices.size();
+        }
+
+        bool empty() const {
+            return vertices.empty();
+        }
+    };
+
 } // namespace geom
 
