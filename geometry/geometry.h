@@ -37,8 +37,8 @@ namespace geom {
         Polygon() = default;
 
         explicit Polygon(std::vector<Point> vertices)
-            : vertices{std::move(vertices)}
-        { }
+            : vertices{std::move(vertices)} {
+        }
 
         std::size_t size() const {
             return vertices.size();

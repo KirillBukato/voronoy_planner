@@ -13,7 +13,10 @@ namespace dijkstra {
         double distance;
         size_t vertex;
 
-        State(double d, size_t v) : distance(d), vertex(v) {}
+        State(double d, size_t v)
+            : distance(d)
+            , vertex(v) {
+        }
 
         bool operator<(const State& other) const {
             return distance > other.distance;
