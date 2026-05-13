@@ -3,41 +3,32 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Segment Voronoi planner using Boost.Polygon voronoi_diagram.
 //
-// Boost.Polygon voronoi works with INTEGER coordinates.  We scale all input
-// coordinates by SCALE (1e5) so that 1 unit of world-space = 1e5 integer units.
+// Public API:
+//   geom::Polyline sdc::PlanPath(polygons, start, end)
 //
-// Input:  polygons (obstacle boundaries) + start/end points
-// Output: path that stays maximally far from obstacles (medial axis routing)
+// Internally uses Fortune's sweep line for segment sites (Boost.Polygon).
+// Coordinates are scaled to int32 for exact arithmetic.
+// Safe coordinate range: |world_coord| < ~167 units with SCALE=1e5.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <queue>
 #include <unordered_map>
 #include <vector>
-#include <queue>
 
 #include <boost/polygon/voronoi.hpp>
 
 #include "geometry/geometry.h"
 #include "dijkstra/dijkstra.h"
 
-namespace sdc {
+// ── Boost.Polygon integer types (internal) ────────────────────────────────────
+namespace sdc_detail {
 
-// ── Integer coordinate type used by Boost.Polygon ────────────────────────────
-using coord_t  = int32_t;
-using fcoord_t = double;
+using coord_t = int32_t;
+static constexpr double SCALE = 1e5;
 
-static constexpr fcoord_t SCALE = 1e5;   // world → integer
-
-inline coord_t to_int(fcoord_t v) {
-    return static_cast<coord_t>(std::round(v * SCALE));
-}
-inline fcoord_t to_world(coord_t v) {
-    return static_cast<fcoord_t>(v) / SCALE;
-}
-
-// ── Boost.Polygon point / segment types ──────────────────────────────────────
 struct IPoint {
     coord_t x, y;
     IPoint() = default;
@@ -50,155 +41,122 @@ struct ISegment {
     ISegment(IPoint a, IPoint b) : p0(a), p1(b) {}
 };
 
-} // namespace sdc
+} // namespace sdc_detail
 
-// ── Boost.Polygon traits specialisation (must be in global namespace) ─────────
+// ── Boost.Polygon traits (must be in global namespace) ────────────────────────
 namespace boost { namespace polygon {
 
 template<>
-struct geometry_concept<sdc::IPoint> { typedef point_concept type; };
+struct geometry_concept<sdc_detail::IPoint> { typedef point_concept type; };
 
 template<>
-struct point_traits<sdc::IPoint> {
-    typedef sdc::coord_t coordinate_type;
-    static inline coordinate_type get(const sdc::IPoint& p, orientation_2d orient) {
-        return (orient == HORIZONTAL) ? p.x : p.y;
+struct point_traits<sdc_detail::IPoint> {
+    typedef sdc_detail::coord_t coordinate_type;
+    static inline coordinate_type get(const sdc_detail::IPoint& p, orientation_2d o) {
+        return (o == HORIZONTAL) ? p.x : p.y;
     }
 };
 
 template<>
-struct geometry_concept<sdc::ISegment> { typedef segment_concept type; };
+struct geometry_concept<sdc_detail::ISegment> { typedef segment_concept type; };
 
 template<>
-struct segment_traits<sdc::ISegment> {
-    typedef sdc::coord_t    coordinate_type;
-    typedef sdc::IPoint     point_type;
-    static inline point_type get(const sdc::ISegment& s, direction_1d dir) {
-        return (dir == LOW) ? s.p0 : s.p1;
+struct segment_traits<sdc_detail::ISegment> {
+    typedef sdc_detail::coord_t   coordinate_type;
+    typedef sdc_detail::IPoint    point_type;
+    static inline point_type get(const sdc_detail::ISegment& s, direction_1d d) {
+        return (d == LOW) ? s.p0 : s.p1;
     }
 };
 
 }} // namespace boost::polygon
 
+// ── Public API ────────────────────────────────────────────────────────────────
 namespace sdc {
 
-// ── Voronoi diagram type ──────────────────────────────────────────────────────
-using VD = boost::polygon::voronoi_diagram<fcoord_t>;
+namespace detail {
 
-// ── Lightweight edge/vertex storage for visualisation ────────────────────────
-struct VoronoiEdgeViz {
-    double x1, y1, x2, y2;
-    bool   finite;
-};
+using VD = boost::polygon::voronoi_diagram<double>;
+using IPoint   = sdc_detail::IPoint;
+using ISegment = sdc_detail::ISegment;
+using coord_t  = sdc_detail::coord_t;
+static constexpr double SCALE = sdc_detail::SCALE;
 
-// ── Result returned by the planner ───────────────────────────────────────────
-struct PlannerResult {
-    geom::Polyline              path;
-    std::vector<VoronoiEdgeViz> voronoi_edges;
-};
+inline coord_t to_int(double v) {
+    return static_cast<coord_t>(std::round(v * SCALE));
+}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Build adjacency graph from the Voronoi diagram.
-// Only finite edges (both endpoints finite and within scene bounds) are used.
-// Returns graph indexed by VD vertex order.
-// Also fills verts_out with world-space positions of each vertex.
-// ─────────────────────────────────────────────────────────────────────────────
+// Build undirected adjacency graph from finite VD edges within scene bounds.
+// verts_out receives world-space (x,y) for each VD vertex in iteration order.
 inline std::vector<std::unordered_map<size_t, double>> BuildGraph(
         const VD& vd,
         std::vector<std::pair<double,double>>& verts_out,
-        double scene_x0, double scene_y0,
-        double scene_x1, double scene_y1)
+        double x0, double y0, double x1, double y1)
 {
-    const double margin = (std::max(scene_x1-scene_x0, scene_y1-scene_y0)) * 2.0;
+    const double margin = std::max(x1-x0, y1-y0) * 2.0;
 
-    // Collect vertex positions
     verts_out.clear();
     verts_out.reserve(vd.num_vertices());
-    for (const auto& v : vd.vertices()) {
+    for (const auto& v : vd.vertices())
         verts_out.push_back({v.x() / SCALE, v.y() / SCALE});
-    }
 
-    // Map VD vertex pointer → index
     std::unordered_map<const VD::vertex_type*, size_t> vmap;
     vmap.reserve(vd.num_vertices());
-    {
-        size_t idx = 0;
-        for (const auto& v : vd.vertices()) vmap[&v] = idx++;
-    }
+    { size_t i = 0; for (const auto& v : vd.vertices()) vmap[&v] = i++; }
 
     std::vector<std::unordered_map<size_t, double>> graph(vd.num_vertices());
 
     for (const auto& edge : vd.edges()) {
-        if (!edge.is_primary()) continue;
-        if (!edge.is_finite()) continue;
-
-        const VD::vertex_type* va = edge.vertex0();
-        const VD::vertex_type* vb = edge.vertex1();
+        if (!edge.is_primary() || !edge.is_finite()) continue;
+        const auto* va = edge.vertex0();
+        const auto* vb = edge.vertex1();
         if (!va || !vb) continue;
-
-        auto ia = vmap.find(va);
-        auto ib = vmap.find(vb);
+        auto ia = vmap.find(va), ib = vmap.find(vb);
         if (ia == vmap.end() || ib == vmap.end()) continue;
 
-        double ax = va->x() / SCALE, ay = va->y() / SCALE;
-        double bx = vb->x() / SCALE, by = vb->y() / SCALE;
-
-        // Skip vertices far outside the scene
-        auto out_of_bounds = [&](double x, double y) {
-            return x < scene_x0 - margin || x > scene_x1 + margin ||
-                   y < scene_y0 - margin || y > scene_y1 + margin;
+        double ax = va->x()/SCALE, ay = va->y()/SCALE;
+        double bx = vb->x()/SCALE, by = vb->y()/SCALE;
+        auto oob = [&](double x, double y) {
+            return x < x0-margin || x > x1+margin || y < y0-margin || y > y1+margin;
         };
-        if (out_of_bounds(ax, ay) || out_of_bounds(bx, by)) continue;
+        if (oob(ax,ay) || oob(bx,by)) continue;
 
-        double dx = bx - ax, dy = by - ay;
-        double len = std::sqrt(dx*dx + dy*dy);
+        double len = std::hypot(bx-ax, by-ay);
         if (len < 1e-9) continue;
-
         graph[ia->second][ib->second] = len;
         graph[ib->second][ia->second] = len;
     }
-
     return graph;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Find the largest connected component in the graph.
-// Returns a set of node indices belonging to it.
-// ─────────────────────────────────────────────────────────────────────────────
+// BFS: find the largest connected component; returns membership mask.
 inline std::vector<bool> LargestComponent(
         const std::vector<std::unordered_map<size_t, double>>& graph)
 {
     const size_t n = graph.size();
-    std::vector<bool> visited(n, false);
-    std::vector<bool> best_mask(n, false);
-    size_t best_size = 0;
-
-    for (size_t start = 0; start < n; start++) {
-        if (visited[start]) continue;
-        // BFS
+    std::vector<bool> visited(n, false), best(n, false);
+    size_t best_sz = 0;
+    for (size_t s = 0; s < n; s++) {
+        if (visited[s]) continue;
         std::vector<size_t> comp;
         std::queue<size_t> q;
-        q.push(start);
-        visited[start] = true;
+        q.push(s); visited[s] = true;
         while (!q.empty()) {
             size_t cur = q.front(); q.pop();
             comp.push_back(cur);
-            for (const auto& [nb, _] : graph[cur]) {
+            for (const auto& [nb, _] : graph[cur])
                 if (!visited[nb]) { visited[nb] = true; q.push(nb); }
-            }
         }
-        if (comp.size() > best_size) {
-            best_size = comp.size();
-            std::fill(best_mask.begin(), best_mask.end(), false);
-            for (size_t idx : comp) best_mask[idx] = true;
+        if (comp.size() > best_sz) {
+            best_sz = comp.size();
+            std::fill(best.begin(), best.end(), false);
+            for (size_t i : comp) best[i] = true;
         }
     }
-    return best_mask;
+    return best;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Find the graph node nearest to (wx, wy), restricted to nodes in `mask`.
-// ─────────────────────────────────────────────────────────────────────────────
+// Nearest vertex to (wx,wy) restricted to mask.
 inline size_t NearestInMask(
         const std::vector<std::pair<double,double>>& verts,
         const std::vector<bool>& mask,
@@ -208,130 +166,78 @@ inline size_t NearestInMask(
     double best_d = std::numeric_limits<double>::max();
     for (size_t i = 0; i < verts.size(); i++) {
         if (!mask[i]) continue;
-        double dx = verts[i].first  - wx;
-        double dy = verts[i].second - wy;
-        double d  = dx*dx + dy*dy;
+        double d = std::hypot(verts[i].first-wx, verts[i].second-wy);
         if (d < best_d) { best_d = d; best = i; }
     }
     return best;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Collect finite Voronoi edges for visualisation.
-// ─────────────────────────────────────────────────────────────────────────────
-inline std::vector<VoronoiEdgeViz> CollectEdges(
-        const VD& vd,
-        double scene_x0, double scene_y0,
-        double scene_x1, double scene_y1)
-{
-    const double margin = (std::max(scene_x1-scene_x0, scene_y1-scene_y0)) * 2.0;
-    std::vector<VoronoiEdgeViz> result;
-    result.reserve(vd.num_edges() / 2);
-    for (const auto& edge : vd.edges()) {
-        if (!edge.is_primary()) continue;
-        if (!edge.is_finite()) continue;
-        // Skip the twin to avoid drawing each edge twice
-        if (&edge > edge.twin()) continue;
-        const VD::vertex_type* va = edge.vertex0();
-        const VD::vertex_type* vb = edge.vertex1();
-        if (!va || !vb) continue;
-        double ax = va->x()/SCALE, ay = va->y()/SCALE;
-        double bx = vb->x()/SCALE, by = vb->y()/SCALE;
-        auto out = [&](double x, double y) {
-            return x < scene_x0-margin || x > scene_x1+margin ||
-                   y < scene_y0-margin || y > scene_y1+margin;
-        };
-        if (out(ax,ay) || out(bx,by)) continue;
-        result.push_back({ax, ay, bx, by, true});
-    }
-    return result;
-}
+} // namespace detail
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Main planner entry point.
+// PlanPath — compute a path from `start` to `end` that stays maximally far
+// from the polygon obstacle boundaries (medial-axis routing).
+// Returns a polyline: [start, voronoi_waypoints..., end].
+// Falls back to a straight line if no Voronoi path is found.
 // ─────────────────────────────────────────────────────────────────────────────
-inline PlannerResult ConstructPolylineUsingVoronoi(
+inline geom::Polyline PlanPath(
         const std::vector<geom::Polygon>& polygons,
-        const geom::Point& localization,
-        const geom::Point& destination)
+        const geom::Point& start,
+        const geom::Point& end)
 {
-    PlannerResult result;
+    using namespace detail;
 
-    // ── 1. Compute scene bounds ───────────────────────────────────────────────
-    double sx0 = localization.x, sy0 = localization.y;
-    double sx1 = destination.x,  sy1 = destination.y;
-    if (sx0 > sx1) std::swap(sx0, sx1);
-    if (sy0 > sy1) std::swap(sy0, sy1);
-    for (const auto& poly : polygons) {
+    // ── Scene bounds ──────────────────────────────────────────────────────────
+    double x0 = std::min(start.x, end.x), y0 = std::min(start.y, end.y);
+    double x1 = std::max(start.x, end.x), y1 = std::max(start.y, end.y);
+    for (const auto& poly : polygons)
         for (const auto& pt : poly.vertices) {
-            sx0 = std::min(sx0, pt.x); sy0 = std::min(sy0, pt.y);
-            sx1 = std::max(sx1, pt.x); sy1 = std::max(sy1, pt.y);
+            x0 = std::min(x0, pt.x); y0 = std::min(y0, pt.y);
+            x1 = std::max(x1, pt.x); y1 = std::max(y1, pt.y);
         }
-    }
 
-    // ── 2. Convert polygon edges to integer segments ──────────────────────────
-    std::vector<ISegment> segments;
+    // ── Convert polygon edges to integer segments ─────────────────────────────
+    std::vector<ISegment> segs;
     for (const auto& poly : polygons) {
         const size_t n = poly.vertices.size();
         if (n < 2) continue;
         for (size_t i = 0; i < n; i++) {
             const auto& a = poly.vertices[i];
-            const auto& b = poly.vertices[(i + 1) % n];
+            const auto& b = poly.vertices[(i+1) % n];
             IPoint pa{to_int(a.x), to_int(a.y)};
             IPoint pb{to_int(b.x), to_int(b.y)};
             if (pa.x == pb.x && pa.y == pb.y) continue;
-            segments.push_back({pa, pb});
+            segs.push_back({pa, pb});
         }
     }
 
-    if (segments.empty()) {
-        result.path = {localization, destination};
-        return result;
-    }
+    if (segs.empty()) return {start, end};
 
-    // ── 3. Build Voronoi diagram ──────────────────────────────────────────────
+    // ── Build Voronoi diagram ─────────────────────────────────────────────────
     VD vd;
-    boost::polygon::construct_voronoi(segments.begin(), segments.end(), &vd);
+    boost::polygon::construct_voronoi(segs.begin(), segs.end(), &vd);
+    if (vd.num_vertices() == 0) return {start, end};
 
-    if (vd.num_vertices() == 0) {
-        result.path = {localization, destination};
-        return result;
-    }
-
-    // ── 4. Collect visualisation edges ───────────────────────────────────────
-    result.voronoi_edges = CollectEdges(vd, sx0, sy0, sx1, sy1);
-
-    // ── 5. Build graph ────────────────────────────────────────────────────────
+    // ── Graph → largest component → Dijkstra ─────────────────────────────────
     std::vector<std::pair<double,double>> verts;
-    auto graph = BuildGraph(vd, verts, sx0, sy0, sx1, sy1);
+    auto graph = BuildGraph(vd, verts, x0, y0, x1, y1);
+    auto mask  = LargestComponent(graph);
 
-    // ── 6. Find largest connected component ──────────────────────────────────
-    auto main_comp = LargestComponent(graph);
-
-    // ── 7. Find nearest nodes in main component ───────────────────────────────
-    const size_t src = NearestInMask(verts, main_comp, localization.x, localization.y);
-    const size_t dst = NearestInMask(verts, main_comp, destination.x,  destination.y);
-
+    const size_t src = NearestInMask(verts, mask, start.x, start.y);
+    const size_t dst = NearestInMask(verts, mask, end.x,   end.y);
     if (src == std::numeric_limits<size_t>::max() ||
-        dst == std::numeric_limits<size_t>::max()) {
-        result.path = {localization, destination};
-        return result;
-    }
+        dst == std::numeric_limits<size_t>::max()) return {start, end};
 
-    // ── 8. Dijkstra ───────────────────────────────────────────────────────────
-    std::vector<size_t> path_indices =
-        dijkstra::FindShortestPath(graph, src, dst);
+    auto indices = dijkstra::FindShortestPath(graph, src, dst);
 
-    // ── 9. Build output polyline ──────────────────────────────────────────────
-    result.path.push_back(localization);
-    for (size_t pi : path_indices) {
-        if (pi < verts.size()) {
-            result.path.push_back({verts[pi].first, verts[pi].second});
-        }
-    }
-    result.path.push_back(destination);
-
-    return result;
+    // ── Assemble polyline ─────────────────────────────────────────────────────
+    geom::Polyline path;
+    path.push_back(start);
+    for (size_t i : indices)
+        if (i < verts.size())
+            path.push_back({verts[i].first, verts[i].second});
+    path.push_back(end);
+    return path;
 }
 
 } // namespace sdc
