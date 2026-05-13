@@ -13,6 +13,7 @@ namespace viz {
         geom::Point start;
         geom::Point end;
         const geom::Polyline& path;
+        const std::vector<geom::Polygon>& polygons;
     };
 
     void SaveSvg(const VisualizationData& data, const std::string& filename);
