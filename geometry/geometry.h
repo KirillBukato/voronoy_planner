@@ -11,17 +11,21 @@ namespace geom {
         bool operator<(const Point& p) const {
             return std::tie(x, y) < std::tie(p.x, p.y);
         }
+
+        bool operator==(const Point& p) const {
+            return x == p.x && y == p.y;
+        }
     };
 
-    double DistanceSq(const Point& a, const Point& b) {
+    inline double DistanceSq(const Point& a, const Point& b) {
         return (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y);
     }
 
-    double Distance(const Point& a, const Point& b) {
+    inline double Distance(const Point& a, const Point& b) {
         return std::sqrt(DistanceSq(a, b));
     }
 
-    bool Equals(const Point& a, const Point& b) {
+    inline bool Equals(const Point& a, const Point& b) {
         return std::abs(a.x - b.x) <= 1e-9 && std::abs(a.y - b.y) <= 1e-9;
     }
 
@@ -46,4 +50,3 @@ namespace geom {
     };
 
 } // namespace geom
-

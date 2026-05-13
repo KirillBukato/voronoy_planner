@@ -17,7 +17,7 @@ namespace dijkstra {
         }
     };
 
-    std::vector<size_t> FindShortestPath(const std::vector<std::unordered_map<size_t, double>>& graph, size_t src, size_t dst) {
+    inline std::vector<size_t> FindShortestPath(const std::vector<std::unordered_map<size_t, double>>& graph, size_t src, size_t dst) {
         std::vector<double> distances(graph.size(), std::numeric_limits<double>::max());
         std::vector<size_t> prev(graph.size(), -1);
         distances[src] = 0;
