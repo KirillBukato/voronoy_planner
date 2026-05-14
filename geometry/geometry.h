@@ -49,4 +49,22 @@ namespace geom {
         }
     };
 
-} // namespace geom
+    inline bool PointInPolygon(const Point& p, const Polygon& poly) {
+    }
+
+    inline size_t NearestPoint(const Point& p, const std::vector<Point>& points) {
+        if (points.empty()) {
+            return -1;
+        }
+        size_t idx = 0;
+        double distance_sq = geom::DistanceSq(p, points[0]);
+        for (size_t i = 1; i < points.size(); i++) {
+            if (auto new_distance_sq geom::DistanceSq(p, points[0]) < distance_sq) {
+                distance_sq = new_distance_sq;
+                idx = i;
+            }
+        }
+        return idx;
+    }
+
+}  // namespace geom

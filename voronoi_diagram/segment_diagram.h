@@ -1,22 +1,5 @@
 #pragma once
 
-// ─────────────────────────────────────────────────────────────────────────────
-// segment_diagram.h
-//
-// Builds a Voronoi diagram for polygon obstacle edges using Boost.Polygon,
-// and returns an undirected adjacency graph over the finite Voronoi vertices.
-//
-// Responsibilities:
-//   1. Compute scene bounds from polygons + start/end
-//   2. Convert polygon edges to integer segments (×SCALE)
-//   3. Run boost::polygon::construct_voronoi
-//   4. Extract finite edges into an adjacency graph
-//
-// Public function:
-//   seg_diag::BuildVoronoiGraph(polygons, start, end)
-//     → seg_diag::VoronoiGraph { vertices, adjacency }
-// ─────────────────────────────────────────────────────────────────────────────
-
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -27,7 +10,6 @@
 
 #include "geometry/geometry.h"
 
-// ── Integer types (internal to Boost traits) ──────────────────────────────────
 namespace seg_diag_detail {
 
     using coord_t = int32_t;
@@ -52,7 +34,6 @@ namespace seg_diag_detail {
 
 } // namespace seg_diag_detail
 
-// ── Boost.Polygon traits (must be in global namespace) ────────────────────────
 namespace boost {
     namespace polygon {
 
@@ -86,34 +67,21 @@ namespace boost {
     } // namespace polygon
 } // namespace boost
 
-// ── Public API ────────────────────────────────────────────────────────────────
 namespace seg_diag {
 
-    // Scale factor: 1 world unit = SCALE integer units.
-    // Safe world-coordinate range: |coord| < 2^24 / SCALE ≈ 167 units.
     static constexpr double SCALE = 1e5;
 
-    // A Voronoi vertex in world coordinates.
     struct Vertex {
         double x, y;
     };
 
-    // Adjacency graph over Voronoi vertices.
-    // graph[i] maps neighbour index → edge length (world units).
     using Graph = std::vector<std::unordered_map<size_t, double>>;
 
     struct VoronoiGraph {
-        std::vector<Vertex> vertices; // world-space positions
-        Graph adjacency;              // undirected weighted graph
+        std::vector<Vertex> vertices;
+        Graph adjacency;
     };
 
-    // ─────────────────────────────────────────────────────────────────────────────
-    // BuildVoronoiGraph
-    //
-    // Converts polygon obstacle edges to a segment Voronoi diagram and returns
-    // the finite-edge adjacency graph.  Edges far outside the scene bounding box
-    // (2× scene extent margin) are discarded.
-    // ─────────────────────────────────────────────────────────────────────────────
     inline VoronoiGraph BuildVoronoiGraph(
         const std::vector<geom::Polygon>& polygons,
         const geom::Point& start,
@@ -123,7 +91,6 @@ namespace seg_diag {
         using coord_t = seg_diag_detail::coord_t;
         using VD = boost::polygon::voronoi_diagram<double>;
 
-        // ── 1. Scene bounds ───────────────────────────────────────────────────────
         double x0 = std::min(start.x, end.x), y0 = std::min(start.y, end.y);
         double x1 = std::max(start.x, end.x), y1 = std::max(start.y, end.y);
         for (const auto& poly : polygons) {
@@ -136,7 +103,6 @@ namespace seg_diag {
         }
         const double margin = std::max(x1 - x0, y1 - y0) * 2.0;
 
-        // ── 2. Convert polygon edges to integer segments ──────────────────────────
         const auto to_int = [](double v) -> coord_t {
             return static_cast<coord_t>(std::round(v * SCALE));
         };
@@ -163,7 +129,6 @@ namespace seg_diag {
             return {};
         }
 
-        // ── 3. Build Voronoi diagram ──────────────────────────────────────────────
         VD vd;
         boost::polygon::construct_voronoi(segs.begin(), segs.end(), &vd);
 
