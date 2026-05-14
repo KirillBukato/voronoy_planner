@@ -130,25 +130,37 @@ namespace seg_diag {
 
         VoronoiGraph result;
         result.vertices.reserve(voronoi_diagram.num_vertices());
-        for (const auto& v : voronoi_diagram.vertices()) {
+        std::vector<size_t> indexes(voronoi_diagram.num_vertices(), std::numeric_limits<size_t>::max());
+        for (size_t i = 0; i < voronoi_diagram.num_vertices(); i++) {
+            const auto& v = voronoi_diagram.vertices()[i];
             geom::Point point{v.x() / SCALE, v.y() / SCALE};
-            result.vertices.push_back(point);
-        }
 
-        std::unordered_map<const VD::vertex_type*, size_t> vmap;
-        vmap.reserve(voronoi_diagram.num_vertices());
-        {
-            size_t i = 0;
-            for (const auto& v : voronoi_diagram.vertices()) {
-                vmap[&v] = i++;
+            bool is_outside = true;
+            for (const auto& polygon : polygons) {
+                if (geom::PointInPolygon(point, polygon)) {
+                    is_outside = false;
+                }
+            }
+
+            if (is_outside) {
+                indexes[i] = result.vertices.size();
+                result.vertices.push_back(point);
             }
         }
 
-        result.adjacency.resize(voronoi_diagram.num_vertices());
+        result.adjacency.resize(result.vertices.size());
 
-        const auto out_of_bounds = [&](double x, double y) {
-            return x < x0 - margin || x > x1 + margin ||
-                   y < y0 - margin || y > y1 + margin;
+        std::unordered_map<const VoronoiDiagram::vertex_type*, size_t> vmap;
+        vmap.reserve(voronoi_diagram.num_vertices());
+        {
+            for (size_t i = 0; i < voronoi_diagram.num_vertices(); i++) {
+                vmap[&voronoi_diagram.vertices()[i]] = i;
+            }
+        }
+
+        const auto out_of_bounds = [&](geom::Point point) {
+            return point.x < x0 - margin || point.x > x1 + margin ||
+                   point.y < y0 - margin || point.y > y1 + margin;
         };
 
         for (const auto& edge : voronoi_diagram.edges()) {
@@ -165,20 +177,20 @@ namespace seg_diag {
             if (ia == vmap.end() || ib == vmap.end()) {
                 continue;
             }
-
-            const double ax = va->x() / SCALE, ay = va->y() / SCALE;
-            const double bx = vb->x() / SCALE, by = vb->y() / SCALE;
-            if (out_of_bounds(ax, ay) || out_of_bounds(bx, by)) {
+            if (indexes[ia->second] == std::numeric_limits<size_t>::max() || indexes[ib->second] == std::numeric_limits<size_t>::max()) {
                 continue;
             }
 
-            const double len = std::hypot(bx - ax, by - ay);
-            if (len < 1e-9) {
-                continue;
+            const geom::Point a{va->x() / SCALE, va->y() / SCALE};
+            const geom::Point b{vb->x() / SCALE, vb->y() / SCALE};
+            if (out_of_bounds(a) || out_of_bounds(b)) {
+                // continue;
             }
 
-            result.adjacency[ia->second][ib->second] = len;
-            result.adjacency[ib->second][ia->second] = len;
+            const double distance = geom::Distance(a, b);
+
+            result.adjacency[indexes[ia->second]][indexes[ib->second]] = distance;
+            result.adjacency[indexes[ib->second]][indexes[ia->second]] = distance;
         }
 
         return result;
