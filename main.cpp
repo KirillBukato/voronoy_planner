@@ -4,14 +4,14 @@
 #include "visualization/visualization.h"
 
 int main() {
-    const geom::Point start{-3.0, 0.0};
-    const geom::Point end{5.0, 0.0};
+    const geom::Point start{-4.0, 0.0};
+    const geom::Point end{6.0, 0.0};
 
     const std::vector<geom::Polygon> polygons = {
         // Bottom boundary wall
         geom::Polygon{{{-3.0, -3.0}, {5.0, -3.0}, {5.0, -2.8}, {-3.0, -2.8}}},
         // Top boundary wall
-        geom::Polygon{{{-3.0, 2.8}, {5.0, 2.8}, {5.0, 3.0}, {-3.0, 3.0}}},
+        geom::Polygon{{{-3.0, 2.3}, {5.0, 2.3}, {5.0, 3.0}, {-3.0, 3.0}}},
         // Obstacle 1
         geom::Polygon{{{-1.7, -0.3}, {-0.9, -0.7}, {-0.6, 0.4}, {-1.4, 0.8}}},
         // Obstacle 2

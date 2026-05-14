@@ -74,7 +74,7 @@ namespace geom {
         size_t idx = 0;
         double distance_sq = geom::DistanceSq(p, points[0]);
         for (size_t i = 1; i < points.size(); i++) {
-            if (auto new_distance_sq = geom::DistanceSq(p, points[0]) < distance_sq) {
+            if (auto new_distance_sq = geom::DistanceSq(p, points[i]); new_distance_sq < distance_sq) {
                 distance_sq = new_distance_sq;
                 idx = i;
             }
