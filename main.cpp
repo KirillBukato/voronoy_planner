@@ -21,14 +21,7 @@ int main() {
     };
 
     const geom::Polyline path = sdc::PlanPath(polygons, start, end);
-
-    std::cout << "Path (" << path.size() << " points):\n";
-    for (const auto& pt : path) {
-        std::cout << "  " << pt.x << " " << pt.y << "\n";
-    }
-
     viz::SaveSvg({polygons, start, end, path}, "output.svg");
-    std::cout << "Visualization saved to output.svg\n";
 
     return 0;
 }
