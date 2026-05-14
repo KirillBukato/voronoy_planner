@@ -50,6 +50,21 @@ namespace geom {
     };
 
     inline bool PointInPolygon(const Point& p, const Polygon& poly) {
+        const auto& verts = poly.vertices;
+        const size_t n = verts.size();
+        if (n < 3) {
+            return false;
+        }
+        bool inside = false;
+        for (size_t i = 0, j = n - 1; i < n; j = i++) {
+            const Point& vi = verts[i];
+            const Point& vj = verts[j];
+            if (((vi.y > p.y) != (vj.y > p.y)) &&
+                (p.x < (vj.x - vi.x) * (p.y - vi.y) / (vj.y - vi.y) + vi.x)) {
+                inside = !inside;
+            }
+        }
+        return inside;
     }
 
     inline size_t NearestPoint(const Point& p, const std::vector<Point>& points) {
@@ -59,7 +74,7 @@ namespace geom {
         size_t idx = 0;
         double distance_sq = geom::DistanceSq(p, points[0]);
         for (size_t i = 1; i < points.size(); i++) {
-            if (auto new_distance_sq geom::DistanceSq(p, points[0]) < distance_sq) {
+            if (auto new_distance_sq = geom::DistanceSq(p, points[0]) < distance_sq) {
                 distance_sq = new_distance_sq;
                 idx = i;
             }

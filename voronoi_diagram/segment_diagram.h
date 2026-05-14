@@ -71,14 +71,10 @@ namespace seg_diag {
 
     static constexpr double SCALE = 1e5;
 
-    struct Vertex {
-        double x, y;
-    };
-
     using Graph = std::vector<std::unordered_map<size_t, double>>;
 
     struct VoronoiGraph {
-        std::vector<Vertex> vertices;
+        std::vector<geom::Point> vertices;
         Graph adjacency;
     };
 
@@ -89,7 +85,7 @@ namespace seg_diag {
         using IPoint = seg_diag_detail::IPoint;
         using ISegment = seg_diag_detail::ISegment;
         using coord_t = seg_diag_detail::coord_t;
-        using VD = boost::polygon::voronoi_diagram<double>;
+        using VoronoiDiagram = boost::polygon::voronoi_diagram<double>;
 
         double x0 = std::min(start.x, end.x), y0 = std::min(start.y, end.y);
         double x1 = std::max(start.x, end.x), y1 = std::max(start.y, end.y);
@@ -107,60 +103,55 @@ namespace seg_diag {
             return static_cast<coord_t>(std::round(v * SCALE));
         };
 
-        std::vector<ISegment> segs;
-        for (const auto& poly : polygons) {
-            const size_t n = poly.vertices.size();
-            if (n < 2) {
-                continue;
-            }
-            for (size_t i = 0; i < n; i++) {
-                const auto& a = poly.vertices[i];
-                const auto& b = poly.vertices[(i + 1) % n];
-                IPoint pa{to_int(a.x), to_int(a.y)};
-                IPoint pb{to_int(b.x), to_int(b.y)};
-                if (pa.x == pb.x && pa.y == pb.y) {
+        std::vector<ISegment> segments;
+        for (const auto& polygon : polygons) {
+            for (size_t i = 0; i < polygon.vertices.size(); i++) {
+                const auto& a = polygon.vertices[i];
+                const auto& b = polygon.vertices[(i + 1) % polygon.vertices.size()];
+                IPoint int_a{to_int(a.x), to_int(a.y)};
+                IPoint int_b{to_int(b.x), to_int(b.y)};
+                if (int_a.x == int_b.x && int_a.y == int_b.y) {
                     continue;
                 }
-                segs.push_back({pa, pb});
+                segments.push_back({int_a, int_b});
             }
         }
 
-        if (segs.empty()) {
+        if (segments.empty()) {
             return {};
         }
 
-        VD vd;
-        boost::polygon::construct_voronoi(segs.begin(), segs.end(), &vd);
+        VoronoiDiagram voronoi_diagram;
+        boost::polygon::construct_voronoi(segments.begin(), segments.end(), &voronoi_diagram);
 
-        if (vd.num_vertices() == 0) {
+        if (voronoi_diagram.num_vertices() == 0) {
             return {};
         }
 
-        // ── 4. Extract vertices and finite edges into adjacency graph ─────────────
         VoronoiGraph result;
-        result.vertices.reserve(vd.num_vertices());
-        for (const auto& v : vd.vertices()) {
-            result.vertices.push_back({v.x() / SCALE, v.y() / SCALE});
+        result.vertices.reserve(voronoi_diagram.num_vertices());
+        for (const auto& v : voronoi_diagram.vertices()) {
+            geom::Point point{v.x() / SCALE, v.y() / SCALE};
+            result.vertices.push_back(point);
         }
 
-        // Map VD vertex pointer → index
         std::unordered_map<const VD::vertex_type*, size_t> vmap;
-        vmap.reserve(vd.num_vertices());
+        vmap.reserve(voronoi_diagram.num_vertices());
         {
             size_t i = 0;
-            for (const auto& v : vd.vertices()) {
+            for (const auto& v : voronoi_diagram.vertices()) {
                 vmap[&v] = i++;
             }
         }
 
-        result.adjacency.resize(vd.num_vertices());
+        result.adjacency.resize(voronoi_diagram.num_vertices());
 
         const auto out_of_bounds = [&](double x, double y) {
             return x < x0 - margin || x > x1 + margin ||
                    y < y0 - margin || y > y1 + margin;
         };
 
-        for (const auto& edge : vd.edges()) {
+        for (const auto& edge : voronoi_diagram.edges()) {
             if (!edge.is_primary() || !edge.is_finite()) {
                 continue;
             }

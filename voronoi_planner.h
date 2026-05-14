@@ -12,7 +12,7 @@ namespace sdc {
 
     namespace detail {
 
-        inline size_t Nearest(const std::vector<seg_diag::Vertex>& verts, double wx, double wy) {
+        inline size_t Nearest(const std::vector<geom::Point>& verts, double wx, double wy) {
             size_t best = std::numeric_limits<size_t>::max();
             double best_d = std::numeric_limits<double>::max();
             for (size_t i = 0; i < verts.size(); i++) {
