@@ -9,6 +9,7 @@
 #include <boost/polygon/voronoi.hpp>
 
 #include "geometry/geometry.h"
+#include "geometry/r_tree.h"
 
 namespace seg_diag_detail {
 
@@ -129,6 +130,10 @@ namespace seg_diag {
         }
 
         VoronoiGraph result;
+
+        geom::RTree rtree;
+        rtree.Build(polygons);
+
         result.vertices.reserve(voronoi_diagram.num_vertices());
         std::vector<size_t> indexes(voronoi_diagram.num_vertices(), std::numeric_limits<size_t>::max());
         for (size_t i = 0; i < voronoi_diagram.num_vertices(); i++) {
@@ -136,11 +141,11 @@ namespace seg_diag {
             geom::Point point{v.x() / SCALE, v.y() / SCALE};
 
             bool is_outside = true;
-            for (const auto& polygon : polygons) {
-                if (geom::PointInPolygon(point, polygon)) {
+            rtree.Query(point, [&](size_t polygon_index) {
+                if (geom::PointInPolygon(point, polygons[polygon_index])) {
                     is_outside = false;
                 }
-            }
+            });
 
             if (is_outside) {
                 indexes[i] = result.vertices.size();
